@@ -1,0 +1,804 @@
+Here are the guidelines for this prompt:
+1. Follow the output instructions precisely and do not make any assumptions. Your output will not be read by a human; it will be directly input into a computer for literal processing. Adding anything else or deviating from the instructions will cause the output to fail.
+2. Think through the answer to each prompt step by step to ensure that the output is perfect; there is no room for error.
+
+You are a pragmatic principal engineer at Google. You are about to get rules to migrate Cadence smart contract code to Cadence 1.0. This code must follow all the migration rules provided and should not change logic. Code should not have placeholders.
+Please strictly follow the migration rules with no deviations. All the Cadence code will be contained withing triple quotes ("""Cadence code""")
+
+Migration rules define all the code changes you must make to migrate Cadence to Cadence 1.0.
+Each rule will have a section that will begin with "## RULE (name of the migration rule)" and then it will have a description as well as code example with old code being marked as "BEFORE" and migrated code example marked as "AFTER".
+Multiple migration rules can be used in combination. There is no rule that should be skipped. Output only migrated Cadence code and nothing else.
+
+Migration rules:
+
+## RULE View Functions added:
+
+Developers can mark their functions as view, which disallows the function from performing state changes. That also makes the intent of functions clear to other programmers, as it allows them to distinguish between functions that change state and ones that do not. Cadence has added support for annotating functions with the view keyword, which enforces that no “mutating” operations occur inside the body of the function. The view keyword is placed before the fun keyword in a function declaration or function expression. If a function has no view annotation, it is considered “non-view”, and users should encounter no difference in behavior in these functions from what they are used to.
+If a function does have a view annotation, then the following mutating operations are not allowed: Writing to, modifying, or destroying any resources, Writing to or modifying any references, Assigning to or modifying any variables that cannot be determined to have been created locally inside of the view function in question. In particular, this means that captured and global variables cannot be written in these functions. You can adopt view functions by adding the view modifier to all functions that do not perform mutating operations.
+BEFORE:
+"""
+access(all)
+resource Collection {
+
+    access(all)
+    var ownedNFTs: @{UInt64: NonFungibleToken.NFT}
+
+    init () {
+        self.ownedNFTs <- {}
+    }
+
+    access(all)
+    fun getCount(): Int {
+        return self.ownedNFTs.length
+    }
+}
+"""
+AFTER:
+"""
+// The function getCount does not perform any state changes, it only reads the length of the collection and returns it. Therefore it can be marked as view.
+access(all)
+view fun getCount(): Int {
+    return self.ownedNFTs.length
+}
+"""
+
+## RULE Conditions No Longer Allow State Changes:
+ In the current version of Cadence, pre-conditions and post-conditions may perform state changes, e.g. by calling a function that performs a mutation. This may result in unexpected behavior, which might lead to bugs. To make conditions predictable, they are no longer allowed to perform state changes. Pre-conditions and post-conditions are now considered view contexts, meaning that any operations that would be prevented inside of a view function are also not permitted in a pre-condition or post-condition. This is to prevent underhanded code wherein a user modifies global or contract state inside of a condition, where they are meant to simply assert properties of that state. In particular, since only expressions were permitted inside conditions already, this means that if users wish to call any functions in conditions, these functions must now be made view functions. Conditions which perform mutations will now result in the error “Impure operation performed in view context”. Adjust the code in the condition so it does not perform mutations. The condition may be considered mutating, because it calls a mutating, i.e. non-view function. It might be possible to mark the called function as view, and the body of the function may need to get updated in turn.
+
+BEFORE:
+"""
+/*
+The function withdraw of a hypothetical NFT collection interface allows the withdrawal of an NFT with a specific ID. In its post-condition, the function states that at the end of the function, the collection should have exactly one fewer item than at the beginning of the function.
+*/
+access(all)
+resource interface Collection {
+
+    access(all)
+    fun getCount(): Int
+
+    access(all)
+    fun withdraw(id: UInt64): @NFT {
+        post {
+            getCount() == before(getCount()) - 1
+        }
+    }
+}
+"""
+AFTER:
+"""
+/*
+The calls to getCount in the post-condition are not allowed and result in the error “Impure operation performed in view context”, because the getCount function is considered a mutating function, as it does not have the view modifier. Here, as the getCount function only performs a read-only operation and does not change any state, it can be marked as view.
+*/
+access(all)
+view fun getCount(): Int {
+    return self.ownedNFTs.length
+}
+"""
+
+## RULE Missing or Incorrect Argument Labels Get Reported:
+ Previously, missing or incorrect argument labels of function calls were not reported. Function calls with missing argument labels are now reported with the error message “missing argument label”, and function calls with incorrect argument labels are now reported with the error message “incorrect argument label”. Function calls with missing argument labels should be updated to include the required argument labels. Function calls with incorrect argument labels should be fixed by providing the correct argument labels.
+
+BEFORE:
+"""
+// Contract deployed on address 0x01
+access(all)
+contract TestContract {
+
+    access(all)
+    struct TestStruct {
+
+        access(all)
+        let a: Int
+
+        access(all)
+        let b: String
+
+        init(first: Int, second: String) {
+            self.a = first
+            self.b = second
+        }
+    }
+}
+"""
+The initializer of TestContract.TestStruct expects the argument labels first and second. However, the call of the initializer provides the incorrect argument label wrong for the first argument, and is missing the label for the second argument.
+"""
+// Script
+import TestContract from 0x1
+
+access(all)
+fun main() {
+    TestContract.TestStruct(wrong: 123, "abc")
+}
+"""
+
+This now results in the following errors:
+"
+error: incorrect argument label
+  --> script:4:34
+   |
+ 4 |           TestContract.TestStruct(wrong: 123, "abc")
+   |                                   ^^^^^ expected "first", got "wrong"
+
+error: missing argument label: "second"
+  --> script:4:46
+   |
+ 4 |           TestContract.TestStruct(wrong: 123, "abc")
+   |                                               ^^^^^
+"
+AFTER:
+"""
+// Script
+import TestContract from 0x1
+
+access(all)
+fun main() {
+    TestContract.TestStruct(first: 123, second: "abc")
+}
+"""
+
+## RULE Incorrect Operators in Reference Expressions Get Reported:
+Previously, incorrect operators in reference expressions were not reported. This had the potential to confuse developers or readers of programs, and could potentially lead to bugs. The syntax for reference expressions is &v as &T, which represents taking a reference to value v as type T. Reference expressions that used other operators, such as as? and as!, e.g. &v as! &T, were incorrect and were previously not reported as an error. The syntax for reference expressions improved to just &v. The type of the resulting reference must still be provided explicitly. If the type is not explicitly provided, the error “cannot infer type from reference expression: requires an explicit type annotation” is reported. For example, existing expressions like &v as &T provide an explicit type, as they statically assert the type using as &T. Such expressions thus keep working and do not have to be changed. Another way to provide the type for the reference is by explicitly typing the target of the expression, for example, in a variable declaration, e.g. via let ref: &T = &v. Reference expressions which use an operator other than as need to be changed to use the as operator. In cases where the type is already explicit, the static type assertion (as &T) can be removed.
+
+BEFORE:
+"""
+// The reference expression uses the incorrect operator as!.
+let number = 1
+let ref = &number as! &Int
+"""
+This now results in the following error:
+
+error: cannot infer type from reference expression: requires an explicit type annotation
+ --> test:3:17
+  |
+3 |       let ref = &number as! &Int
+  |                  ^
+
+AFTER:
+"""
+let number = 1
+let ref = &number as &Int
+"""
+Alternatively, the same code can now also be written as follows:
+"""
+let number = 1
+let ref: &Int = &number
+"""
+
+## RULE Naming Rules Got Tightened
+Previously, Cadence allowed language keywords (e.g. continue, for, etc.) to be used as names. For example, the following program was allowed:
+
+Some keywords are still allowed to be used as names, as they have limited significance within the language. These allowed keywords are as follows:
+from: only used in import statements """import foo from"""
+account: used in access modifiers """access(account) let"""
+all: used in access modifier """access(all) let"""
+view: used as modifier for function declarations and expressions """view fun foo()"""
+Any other keywords will raise an error during parsing, such as:
+"""
+let break: Int = 0
+//  ^ error: expected identifier after start of variable declaration, got keyword break
+"""
+Names which use language keywords must be renamed.
+BEFORE:
+"""
+// A variable is named after a language keyword.
+let contract = signer.borrow<&MyContract>(name: "MyContract")
+//  ^ error: expected identifier after start of variable declaration, got keyword contract
+"""
+AFTER:
+"""
+// The variable is renamed to avoid the clash with the language keyword.
+let myContract = signer.borrow<&MyContract>(name: "MyContract")
+"""
+
+## RULE Syntax for Function Types Improved
+Previously, function types were expressed using a different syntax from function declarations or expressions. Function types are now expressed using the fun keyword, just like expressions and declarations. This improves readability and makes function types more obvious.
+
+For example, given the following function declaration:
+"""
+fun foo(n: Int8, s: String): Int16 { /* ... */ }
+"""
+The function foo now has the type fun(Int8, String): Int16.
+
+The ":" token is right-associative, so functions that return other functions can have their types written without nested parentheses:
+"""
+fun curriedAdd(_ x: Int): fun(Int): Int {
+  return fun(_ y: Int): Int {
+    return x + y
+  }
+}
+// function "curriedAdd" has the type "fun(Int): fun(Int): Int"
+"""
+
+To further bring the syntax for function types closer to the syntax of function declarations expressions, it is now possible to omit the return type, in which case the return type defaults to Void.
+"""
+fun logTwice(_ value: AnyStruct) { // Return type is implicitly "Void"
+  log(value)
+  log(value)
+}
+
+// The function types of these variables are equivalent
+let logTwice1: fun(AnyStruct): Void = logTwice
+let logTwice2: fun(AnyStruct) = logTwice
+"""
+
+As a bonus consequence, it is now allowed for any type to be parenthesized. This is useful for complex type signatures, or for expressing optional functions:
+"""
+// A function that returns an optional Int16
+let optFun1: fun (Int8): Int16? =
+    fun (_: Int8): Int? { return nil }
+
+// An optional function that returns an Int16
+let optFun2: (fun (Int8): Int16)? = nil
+This improvement was proposed in ****FLIP 43.
+"""
+
+Programs that use the old function type syntax need to be updated by replacing the surrounding parentheses of function types with the fun keyword.
+
+BEFORE:
+"""
+let baz: ((Int8, String): Int16) = foo
+      // ^                     ^
+      // surrounding parentheses of function type
+"""
+AFTER:
+"""
+let baz: fun (Int8, String): Int16 = foo
+"""
+
+## RULE Entitlements and Safe Down-casting
+When giving another user a reference or Capability to a value you own, the fields and functions that the user can access is determined by the type of the reference or Capability. Previously, access to a value of type T, e.g. via a reference &T, would give access to all fields and functions of T. Access could be restricted, by using a restricted type. For example, a restricted reference &T{I} could only access members that were pub on I. Since references could not be downcast, any members defined on T but not on I were unavailable to this reference, even if they were public. Access control is now handled using a new feature called Entitlements A reference can now be “entitled” to certain facets of an object. For example, the reference auth(Withdraw) &Vault is entitled to access fields and functions of Vault that require the Withdraw entitlement. Entitlements can be are declared using the new entitlement syntax. Members can be made to require entitlements using the access modifier syntax access(E), where E is an entitlement that the user must possess.
+
+For example:
+"""
+entitlement Withdraw
+
+access(Withdraw)
+fun withdraw(amount: UFix64): @Vault
+"""
+References can now always be down-casted, the standalone auth modifier is not necessary anymore, and got removed. For example, the reference &{Provider} can now be downcast to &Vault, so access control is now handled entirely through entitlements, rather than types. The access modifiers of fields and functions need to be carefully audited and updated. Fields and functions that have the pub access modifier are now callable by anyone with any reference to that type. If access to the member should be restricted, the pub access modifier needs to be replaced with an entitlement access modifier. When creating a Capability or a reference to a value, it must be carefully considered which entitlements are provided to the recipient of that Capability or reference – only the entitlements which are necessary and not more should be include in the auth modifier of the reference type.
+
+BEFORE:
+"""
+pub resource interface Provider {
+    pub fun withdraw(amount: UFix64): @Vault {
+        // ...
+    }
+}
+
+pub resource Vault: Provider, Receiver, Balance {
+    pub fun withdraw(amount: UFix64): @Vault {
+        // ...
+    }
+
+    pub fun deposit(from: @Vault) {
+       // ...
+    }
+
+    pub var balance: UFix64
+}
+AFTER:
+"""
+entitlement Withdraw
+
+access(all)
+resource interface Provider {
+
+    access(Withdraw)
+    fun withdraw(amount: UFix64): @Vault {
+        // ...
+    }
+}
+
+access(all)
+resource Vault: Provider, Receiver, Balance {
+
+    access(Withdraw)  // withdrawal requires permission
+    fun withdraw(amount: UFix64): @Vault {
+        // ...
+    }
+
+    access(all)
+    fun deposit(from: @Vault) {
+       // ...
+    }
+
+    access(all)
+    var balance: UFix64
+}
+"""
+
+Here, the access(Withdraw) syntax means that a reference to Vault must possess the Withdraw entitlement in order to be allowed to call the withdraw function, which can be given when a reference or Capability is created by using a new syntax: auth(Withdraw) &Vault. This would allow developers to safely downcast &{Provider} references to &Vault references if they want to access functions like deposit and balance, without enabling them to call withdraw.
+
+## RULE pub and priv Access Modifiers Got Removed
+With the previously mentioned entitlements feature, which uses access(E) syntax to denote entitled access, the pub, priv and pub(set) modifiers became the only access modifiers that did not use the access syntax.
+The pub, priv and pub(set) access modifiers got removed from the language, in favor of their more explicit access(all) and access(self) equivalents (for pub and priv, respectively). This makes access modifiers more uniform and better match the new entitlements syntax.
+The changes are:
+pub => access(all)
+priv => access(self)
+Users should replace any pub modifiers with access(all), and any priv modifiers with access(self).
+
+BEFORE:
+"""
+// Types and members could be declared with pub and priv:
+
+pub resource interface Collection {
+    pub fun getCount(): Int
+    priv fun myPrivateFunction()
+    pub(set) let settableInt: Int
+}
+"""
+
+AFTER:
+"""
+// The same behavior can be achieved with access(all) and access(self)
+
+access(all)
+resource interface Collection {
+
+    access(all)
+    fun getCount(): Int
+
+    access(self)
+		fun myPrivateFunction()
+
+    access(all)
+    let settableInt: Int
+
+    access(all)
+    let setIntValue(_ i: Int): Int
+}
+"""
+
+## RULE Restricted Types Got Replaced with Intersection Types
+With the improvements to access control enabled by entitlements and safe down-casting, the restricted type feature is redundant. Restricted types have been removed. All types, including references, can now be down-casted, restricted types are no longer used for access control. At the same time intersection types got introduced. Intersection types have the syntax {I1, I2, ... In}, where all elements of the set of types (I1, I2, ... In) are interface types. A value is part of the intersection type if it conforms to all the interfaces in the intersection type’s interface set. This functionality is equivalent to restricted types that restricted AnyStruct and AnyResource. Code that relies on the restriction behavior of restricted types can be safely changed to just use the concrete type directly, as entitlements will make this safe. For example, &Vault{Balance} can be replaced with just &Vault, as access to &Vault only provides access to safe operations, like getting the balance – privileged operations, like withdrawal, need additional entitlements. Code that uses AnyStruct or AnyResource explicitly as the restricted type, e.g. in a reference, &AnyResource{I}, needs to remove the use of AnyStruct / AnyResource. Code that already uses the syntax &{I} can stay as-is.
+
+BEFORE:
+"""
+// This function accepted a reference to a T value, but restricted what functions were allowed to be called on it to those defined on the X, Y, and Z interfaces.
+pub resource interface X {
+    pub fun foo()
+}
+
+pub resource interface Y {
+	pub fun bar()
+}
+
+pub resource interface Z {
+	pub fun baz()
+}
+
+pub resource T: X, Y, Z {
+   // implement interfaces
+
+	pub fun qux() {}
+}
+
+pub fun exampleFun(param: &T{X, Y, Z}) {
+    // "param" cannot call "qux" here, because it is restricted to
+    // "X", "Y" and "Z".
+}
+"""
+AFTER:
+"""
+access(all)
+resource interface X {
+		access(all)
+    fun foo()
+}
+
+access(all)
+resource interface Y {
+		access(all)
+    fun bar()
+}
+
+resource interface Z {
+		access(all)
+    fun baz()
+}
+
+access(all)
+entitlement Q
+
+access(all)
+resource T: X, Y, Z {
+   // implement interfaces
+
+	access(Q)
+  fun qux() {
+      // ...
+  }
+}
+
+access(all)
+fun exampleFun(param: &T) {
+    // "param" still cannot call "qux" here, because it lacks entitlement "Q"
+}
+"""
+Any functions on T that the author of T does not want users to be able to call publicly should be defined with entitlements, and thus will not be accessible to the unauthorized param reference, like with qux above.
+
+## RULE Account Access Got Improved
+Previously, access to accounts was granted wholesale: Users would sign a transaction, authorizing the code of the transaction to perform any kind of operation, for example, write to storage, but also add keys or contracts. Users had to trust that a transaction would only perform supposed access, e.g. storage access to withdraw tokens, but still had to grant full access, which would allow the transaction to perform other operations. Dapp developers who require users to sign transactions should be able to request the minimum amount of access to perform the intended operation, i.e. developers should be able to follow the principle of least privilege (PoLA). This allows users to trust the transaction and Dapp. Previously, access to accounts was provided through the built-in types AuthAccount and PublicAccount: AuthAccount provided full write access to an account, whereas PublicAccount only provided read access. With the introduction of entitlements, this access is now expressed using entitlements and references, and only a single Account type is necessary. In addition, storage related functionality were moved to the field "Account.storage". Access to administrative account operations, such as writing to storage, adding keys, or adding contracts, is now gated by both coarse grained entitlements (e.g. Storage, which grants access to all storage related functions, and Keys, which grants access to all key management functions), as well as fine-grained entitlements (e.g. "SaveValue" to save a value to storage, or "AddKey" to add a new key to the account). Transactions can now request the particular entitlements necessary to perform the operations in the transaction. Code that previously used "PublicAccount" can simply be replaced with an unauthorized account reference, "&Account". Code that previously used "AuthAccount" must be replaced with an authorized account reference. Depending on what functionality of the account is accessed, the appropriate entitlements have to be specified. For example, if the "save" function of "AuthAccount" was used before, the function call must be replaced with "storage.save", and the "SaveValue" or "Storage" entitlement is required.
+
+BEFORE:
+"""
+// The transactions wants to save a value to storage. It must request access to the whole account, even though it does not need access beyond writing to storage.
+
+transaction {
+    prepare(signer: AuthAccount) {
+        signer.save("Test", to: /storage/test)
+    }
+}
+"""
+AFTER:
+"""
+// The transaction requests the fine-grained account entitlement SaveValue, which allows the transaction to call the save function.
+
+transaction {
+    prepare(signer: auth(SaveValue) &Account) {
+        signer.storage.save("Test", to: /storage/test)
+    }
+}
+
+// If the transaction attempts to perform other operations, such as adding a new key, it is rejected:
+
+transaction {
+    prepare(signer: auth(SaveValue) &Account) {
+        signer.storage.save("Test", to: /storage/test)
+        signer.keys.add(/* ... */)
+        //          ^^^ Error: Cannot call function, requires "AddKey" or "Keys" entitlement
+    }
+}
+"""
+
+## RULE Deprecated Key Management API Got Removed
+The original account key management API, got removed. Instead, the improved key management API should be used. Replace uses of the original account key management API functions with equivalents of the improved API:
+"AuthAccount.addPublicKey" => "Account.keys.add"
+"AuthAccount.removePublicKey" => "Account.keys.revoke"
+
+BEFORE:
+"""
+transaction(encodedPublicKey: [UInt8]) {
+    prepare(signer: AuthAccount) {
+        signer.addPublicKey(encodedPublicKey)
+    }
+}
+"""
+AFTER:
+"""
+transaction(publicKey: [UInt8]) {
+    prepare(signer: auth(Keys) &Account) {
+        signer.keys.add(
+            publicKey: PublicKey(
+                publicKey: publicKey,
+                signatureAlgorithm: SignatureAlgorithm.ECDSA_P256
+            ),
+            hashAlgorithm: HashAlgorithm.SHA3_256,
+            weight: 100.0
+        )
+    }
+}
+"""
+
+## RULE Resource Tracking for Optional Bindings Improved
+Resource tracking for optional bindings (”if-let statements”) was fixed. For example, the following program used to be invalid, reporting a resource loss error for optR: Programs that previously resolved the incorrect resource loss error with a workaround, for example by invalidating the resource also in the else-branch or after the if-statement, are now invalid:
+
+BEFORE:
+"""
+fun test() {
+    let r <- create R()
+    let optR <- asOpt(<-r)
+    if let r2 <- optR {
+        destroy r2
+    } else {
+        destroy optR
+        // unnecessary, but added to avoid error
+    }
+}
+"""
+AFTER:
+"""
+fun test() {
+    let r <- create R()
+    let optR <- asOpt(<-r)
+    if let r2 <- optR {
+        destroy r2
+    }
+}
+"""
+
+## RULE Definite Return Analysis Got Improved
+Definite return analysis determines if a function always exits, in all possible execution paths, e.g. through a return statement, or by calling a function that never returns, like panic.
+
+"""
+resource R {}
+
+fun mint(id: UInt64): @R {
+    if id > 100 {
+        return <- create R()
+    } else {
+        panic("bad id")
+    }
+}
+"""
+The program above was previously rejected with a “missing return statement” error – even though we can convince ourselves that the function will exit in both branches of the if-statement, and that any code after the if-statement is unreachable, the type checker was not able to detect that – it now does.
+
+New programs do not need workarounds anymore, and can be written naturally. Programs that previously resolved the incorrect error with a workaround, for example by adding an additional exit at the end of the function, are now invalid:
+
+BEFORE:
+"""
+resource R {}
+
+fun mint(id: UInt64): @R {
+    if id > 100 {
+        return <- create R()
+    } else {
+        panic("bad id")
+    }
+
+    // unnecessary, but added to avoid error
+    panic("unreachable")
+}
+"""
+
+The improved type checker now detects and reports the unreachable code after the if-statement as an error:
+"
+error: unreachable statement
+  --> test.cdc:12:4
+   |
+12 |     panic("unreachable")
+   |     ^^^^^^^^^^^^^^^^^^^^
+exit status 1
+"
+AFTER:
+"""
+// To make the code valid, simply remove the unreachable code.
+fun mint(id: UInt64): @R {
+    if id > 100 {
+        return <- create R()
+    } else {
+        panic("bad id")
+    }
+}
+"""
+
+## RULE Semantics for Variables in For-Loop Statements Got Improved
+Previously, the iteration variable of for-in loops was re-assigned on each iteration. The behavior of for-in loops improved, so that a new iteration variable is introduced for each iteration.This change only affects few programs, as the behavior change is only noticeable if the program captures the iteration variable in a function value (closure). Previously, values would result in [3, 3, 3], which might be surprising and unexpected. This is because x was reassigned the current array element on each iteration, leading to each function in fs returning the last element of the array.
+
+"""
+// Capture the values of the array [1, 2, 3]
+let fs: [((): Int)] = []
+for x in [1, 2, 3] {
+    // Create a list of functions that return the array value
+    fs.append(fun (): Int {
+        return x
+    })
+}
+
+// Evaluate each function and gather all array values
+let values: [Int] = []
+for f in fs {
+    values.append(f())
+}
+"""
+
+## RULE References to Resource-Kinded Values Get Invalidated When the Referenced Values Are Moved
+References are now invalidated if the referenced resource is moved after the reference was taken. The reference is invalidated upon the first move, regardless of the origin and the destination.
+
+"""
+// Create a resource.
+let r <-create R()
+
+// And take a reference.
+let ref = &r as &R
+
+// Then move the resource into an account.
+account.save(<-r, to: /storage/r)
+
+// Update the reference.
+ref.id = 2
+Old behavior:
+
+// This will also update the referenced resource in the account.
+ref.id = 2
+The above operation will now result in a static error.
+
+// Trying to update/access the reference will produce a static error:
+//     "invalid reference: referenced resource may have been moved or destroyed"
+ref.id = 2
+However, not all scenarios can be detected statically. e.g:
+
+fun test(ref: &R) {
+    ref.id = 2
+}
+"""
+
+In the above function, it is not possible to determine whether the resource to which the reference was taken has been moved or not. Therefore, such cases are checked at run-time, and a run-time error will occur if the resource has been moved. Review code that uses references to resources, and check for cases where the referenced resource is moved. Such code may now be reported as invalid, or result in the program being aborted with an error when a reference to a moved resource is de-referenced.
+
+## RULE Capability Controller API Replaced Existing Linking-based Capability API
+The existing linking-based capability API has been replaced by a more powerful and easier to use API based on the notion of Capability Controllers. The new API makes the creation of new and the revocation of existing capabilities simpler. Existing uses of the linking-based capability API must be replaced with the new Capability Controller API.
+
+"AuthAccount.link", with private path => Account.capabilities.storage.issue
+"AuthAccount.link", with public path => Account.capabilities.storage.issue and Account.capabilities.publish
+"AuthAccount.linkAccount" => AuthAccount.capabilities.account.issue
+"AuthAccount.unlink", with private path	=> Get capability controller: "Account.capabilities.storage/account.get", Revoke controller: "Storage/AccountCapabilityController.delete"
+"AuthAccount.unlink", with public path => Get capability controller: "Account.capabilities.storage/account.get", Revoke controller: "Storage/AccountCapabilityController.delete"
+Unpublish capability:
+Account.capabilities.unpublish |
+| AuthAccount/PublicAccount.getCapability | Account.capabilities.get |
+| AuthAccount/PublicAccount.getCapability with followed borrow | Account.capabilities.borow |
+| AuthAccount.getLinkTarget | N/A |
+
+"""
+// Assume there is a Counter resource which stores a count, and it implements an interface HasCount which is used to allow read access to the count.
+
+access(all)
+resource interface HasCount {
+    access(all)
+    count: Int
+}
+
+access(all)
+resource Counter {
+    access(all)
+    var count: Int
+
+    init(count: Int) {
+        self.count = count
+    }
+}
+"""
+
+BEFORE:
+"""
+transaction {
+    prepare(signer: AuthAccount) {
+        signer.save(
+            <-create Counter(count: 42),
+            to: /storage/counter
+        )
+
+        signer.link<&{HasCount}>(/public/hasCount, target: /storage/counter)
+    }
+}
+
+access(all)
+fun main(): Int {
+    let counterRef = getAccount(0x1)
+        .getCapabilities<&{HasCount}>(/public/hasCount)
+        .borrow()!
+    return counterRef.count
+}
+"""
+AFTER:
+"""
+transaction {
+    prepare(signer: auth(Storage, Capabilities) &Account) {
+        signer.save(
+            <-create Counter(count: 42),
+            to: /storage/counter
+        )
+
+        let cap = signer.capabilities.storage.issue<&{HasCount}>(/storage/counter)
+        signer.capabilities.publish(cap, at: /public/hasCount)
+    }
+}
+
+access(all)
+fun main(): Int {
+    let counterRef = getAccount(0x1)
+        .capabilities.borrow<&{HasCount}>(/public/hasCount)!
+    return counterRef.count
+}
+
+
+## RULE External Mutation Got Improved
+The mutability of containers (updating a field of a composite value, key of a map, or index of an array) through references has changed: When a field/element is accessed through a reference, a reference to the accessed inner object is returned, instead of the actual object. These returned references are unauthorized by default, and the author of the object (struct/resource/etc.) can control what operations are permitted on these returned references by using entitlements and entitlement mappings. The most notable change in this improvement is that, when a field/element is accessed through a reference, a reference to the accessed inner object is returned, instead of the actual object. So developers would need to change their code to Work with references, instead of the actual object, when accessing nested objects through a reference, and use proper entitlements for fields when they declare their own "struct" and "resource" types.
+
+Consider the below resource collection:
+"""
+pub resource MasterCollection {
+    pub let kittyCollection: @Collection
+    pub let topshotCollection: @Collection
+}
+
+pub resource Collection {
+    pub(set) var id: String
+
+    access(all) var ownedNFTs: @{UInt64: NonFungibleToken.NFT}
+
+    access(all) fun deposit(token: @NonFungibleToken.NFT) { ... }
+}
+"""
+
+BEFORE:
+"""
+// Earlier, it was possible to mutate the inner collections, even if someone only had a reference to the MasterCollection. e.g:
+var masterCollectionRef: &MasterCollection = ...
+
+// Directly updating the field
+masterCollectionRef.kittyCollection.id = "NewID"
+
+// Calling a mutating function
+masterCollectionRef.kittyCollection.deposit(<-nft)
+
+// Updating via the reference
+let ownedNFTsRef = &masterCollectionRef.kittyCollection.ownedNFTs as &{UInt64: NonFungibleToken.NFT}
+destroy ownedNFTsRef.insert(key: 1234, <-nft)
+"""
+AFTER:
+"""
+pub resource MasterCollection {
+    access(KittyCollectorMapping)
+    let kittyCollection: @Collection
+
+    access(TopshotCollectorMapping)
+    let topshotCollection: @Collection
+}
+
+pub resource Collection {
+    pub(set) var id: String
+
+    access(Identity)
+    var ownedNFTs: @{UInt64: NonFungibleToken.NFT}
+
+    access(Insert)
+    fun deposit(token: @NonFungibleToken.NFT) { /* ... */ }
+}
+
+// Entitlements and mappings for "kittyCollection"
+
+entitlement KittyCollector
+
+entitlement mapping KittyCollectorMapping {
+    KittyCollector -> Insert
+    KittyCollector -> Remove
+}
+
+// Entitlements and mappings for "topshotCollection"
+
+entitlement TopshotCollector
+
+entitlement mapping TopshotCollectorMapping {
+    TopshotCollector -> Insert
+    TopshotCollector -> Remove
+}
+"""
+
+BEFORE:
+"""
+// Then for a reference with no entitlements, none of the previously mentioned operations would be allowed:
+
+var masterCollectionRef: &MasterCollection <- ...
+
+// Error: Cannot update the field. Doesn't have sufficient entitlements.
+masterCollectionRef.kittyCollection.id = "NewID"
+
+// Error: Cannot directly update the dictionary. Doesn't have sufficient entitlements.
+destroy masterCollectionRef.kittyCollection.ownedNFTs.insert(key: 1234, <-nft)
+destroy masterCollectionRef.ownedNFTs.remove(key: 1234)
+
+// Error: Cannot call mutating function. Doesn't have sufficient entitlements.
+masterCollectionRef.kittyCollection.deposit(<-nft)
+
+// Error: "masterCollectionRef.kittyCollection.ownedNFTs" is already a non-auth reference.
+// Thus cannot update the dictionary. Doesn't have sufficient entitlements.
+let ownedNFTsRef = &masterCollectionRef.kittyCollection.ownedNFTs as &{UInt64: NonFungibleToken.NFT}
+destroy ownedNFTsRef.insert(key: 1234, <-nft)
+"""
+AFTER:
+"""
+// To perform these operations on the reference, one would need to have obtained a reference with proper entitlements:
+
+var masterCollectionRef: auth{KittyCollector} &MasterCollection <- ...
+
+// Directly updating the field
+masterCollectionRef.kittyCollection.id = "NewID"
+
+// Updating the dictionary
+destroy masterCollectionRef.kittyCollection.ownedNFTs.insert(key: 1234, <-nft)
+destroy masterCollectionRef.kittyCollection.ownedNFTs.remove(key: 1234)
+
+// Calling a mutating function
+masterCollectionRef.kittyCollection.deposit(<-nft)
+"""
