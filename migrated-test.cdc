@@ -1,10 +1,12 @@
 
-access(all) contract Test {
+access(all)
+contract Test {
 
-    access(all) let address: String
+    access(all)
+    let address: String
 
-    init(x: auth(account) &Account) {
-        self.address = x.address.toString()
+    init(x: auth(Storage, Keys, Capabilities) &Account) {
+        self.address = x.address.toHex()
     }
 
     access(all)
@@ -12,12 +14,14 @@ access(all) contract Test {
         return self.address
     }
 
-    access(all) 
+    access(all)
     fun fun2(accounts: [Capability<&Account>]) {}
 
     access(all)
     fun fun3() {
-        Test.fun1() == "123"
+        post {
+            Test.fun1() =="123"
+        }
     }   
 
     access(all)
@@ -27,12 +31,12 @@ access(all) contract Test {
     }
 
     access(all)
-    fun continueFunc() {}
+    fun renamedFuncForContinue() {}
 
     access(all)
     fun fun6() {
         let someNum: UInt128 = 123456789
-        let someBytes: [UInt8] = someNum.toBigEndianBytes()
+        let someBytes: [UInt8] = someNum.toBigEndian()
     }
 
     access(all)

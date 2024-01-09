@@ -13,14 +13,13 @@ import (
 //go:embed rules
 var migrationRules string
 
-const key = "..."
-
 func main() {
+	var gptKey = os.Getenv("GPT_KEY")
 	codeFile := os.Args[1]
 	data, err := os.ReadFile(codeFile)
 	code := fmt.Sprintf(`Migrate the following code to Cadence 1.0 according with all the provided rules: """%s"""`, data)
 
-	client := openai.NewClient(key)
+	client := openai.NewClient(gptKey)
 
 	resp, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
 		Model: openai.GPT4,
