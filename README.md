@@ -5,15 +5,9 @@ This is POC tool that uses GPT to migrate Cadence to 1.0 version.
 ### Running
 Create a GPT API key here: https://platform.openai.com/api-keys 
 
-Set the generate key as an environment variable in your terminal:
+Set the generated key as an environment variable in your terminal and run the tool using Go:
 ```
-GPT_KEY={your generated key}
-```
-
-To run the tool you have to run it using Go like so:
-
-```
-go run main/main.go {contract file}
+GPT_KEY={your generated key} go run main/main.go {contract file}
 ```
 
 This will output a migrated file.
@@ -21,7 +15,7 @@ This will output a migrated file.
 Example:
 
 ```
-go run main/main.go test.cdc
+GPT_KEY=123123 go run main/main.go test.cdc
 ```
 
 ### WARNING
