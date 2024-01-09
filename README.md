@@ -1,4 +1,7 @@
-![Screenshot 2024-01-09 at 17 50 54](https://github.com/onflow/cadence-1-migrator/assets/75445744/d6d2874f-f5ce-4d01-b493-3081ff756e49)## Cadence 1.0 Migrator
+
+## Cadence 1.0 Migrator
+![Screenshot 2024-01-09 at 18 13 41](https://github.com/onflow/cadence-1-migrator/assets/75445744/c87a05f0-5506-410e-b326-b1146653df68)
+
 
 This is POC tool that uses GPT to migrate Cadence to 1.0 version.
 
@@ -27,4 +30,6 @@ This is WIP! expect issues. There is a limit on the contract input length right 
 
 ### Example
 Here's a limited example of diff for migrated Cadence code.
+
+
 ![Screenshot 2024-01-09 at 17 50 54](https://github.com/onflow/cadence-1-migrator/assets/75445744/1cd9d098-d2cd-4a66-9f86-15fb946c820c)
